@@ -1,0 +1,27 @@
+﻿# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# virtual envs
+venv/
+env/
+ENV/
+.venv/
+
+# editor
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Data / models (we will use LFS for big models)
+Models/*.pt
+*.pt
+*.caffemodel
+*.onnx
+dataset/
+dataset/
