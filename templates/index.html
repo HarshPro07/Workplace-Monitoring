@@ -1,64 +1,260 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Workplace Monitoring</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-QWTKZyjpPEjISv5WaRU9OFeRpok6YctnYmDr5pNlyT2bRjXh0JMhjY6hW+ALEwIH" crossorigin="anonymous">
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Workplace Monitoring Dashboard</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
 
-    <style>
-        /* Light UI Styling */
-        body {
-            /* Light, professional background */
-            background-color: #f8f9fa; /* Bootstrap's light gray */
-            color: #343a40; /* Dark text for contrast */
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            padding-top: 50px;
-        }
-        .main-container {
-            /* Center the entire content block */
-            max-width: 1000px;
-        }
-        .header-title {
-            color: #007bff; /* Primary Blue color for the main title */
-            font-weight: 700;
-            margin-bottom: 30px;
-            font-size: 2.5rem;
-            text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.1);
-        }
-        .video-wrapper {
-            /* Container for the video to apply shadow and rounded corners */
-            display: inline-block;
-            border-radius: 15px;
-            overflow: hidden; /* Important for rounding the image itself */
-            box-shadow: 0 8px 30px rgba(0, 0, 0, 0.2); /* Stronger shadow for focus */
-            background-color: #fff; /* White background behind the image */
-            border: 5px solid #007bff; /* Subtle blue border */
-        }
-        .video-feed {
-            /* Image itself */
-            display: block;
-            width: 100%;
-            height: auto;
-            max-width: 900px; /* Adjust max width as needed */
-        }
-    </style>
+  <style>
+    body {
+      background: linear-gradient(135deg, #e3f2fd, #f4f6f9);
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      color: #343a40;
+      overflow-x: hidden;
+    }
+
+    .navbar {
+      background-color: #0d6efd;
+      box-shadow: 0 3px 8px rgba(0, 0, 0, 0.1);
+      padding: 0.6rem 1rem;
+    }
+    .navbar-brand { color: white !important; font-weight: 600; font-size: 1.4rem; }
+
+    .video-card {
+      background-color: white;
+      border-radius: 16px;
+      box-shadow: 0 6px 20px rgba(0, 0, 0, 0.12);
+      padding: 20px;
+      margin: 30px auto;
+      max-width: 920px;
+    }
+    .video-wrapper {
+       border-radius: 12px;
+       overflow: hidden;
+       border: 3px solid #0d6efd;
+       background: #000;
+       max-height: 420px;          /* limit frame height */
+       display: flex;
+       justify-content: center;
+       align-items: center;
+    }
+
+    .video-feed {
+       width: 100%;
+       height: 100%;
+       object-fit: contain;        /* keeps full face visible without distortion */
+       max-height: 420px;          /* consistent height cap */
+    }
+
+
+    .status-container {
+      margin-top: 20px;
+      display: flex;
+      justify-content: space-between;
+      flex-wrap: nowrap;          /* keep all items on one line on wide screens */
+      gap: 18px;
+      padding: 0 10px;
+      max-width: 920px;
+      margin-left: auto;
+      margin-right: auto;
+      overflow-x: auto;           /* allow horizontal scroll if viewport too small */
+     }
+
+    .status-box {
+      flex: 1 1 22%;              /* allow up to 4 boxes in a row (4 * 22% + gaps fits 100%) */
+      max-width: 22%;
+      background-color: white;
+      border-radius: 12px;
+      box-shadow: 0 3px 12px rgba(0, 0, 0, 0.08);
+      padding: 14px;
+      text-align: left;
+      transition: transform 0.25s ease, box-shadow 0.25s ease;
+      min-height: 110px;
+      position: relative;
+  }
+
+/* responsive: on small viewports let two per row and enable wrapping */
+@media (max-width: 768px) {
+  .status-container { flex-wrap: wrap; }
+  .status-box {
+    flex: 1 1 45%;
+    max-width: 45%;
+  }
+}
+
+
+    .status-box:hover { transform: translateY(-6px); box-shadow: 0 8px 26px rgba(0,0,0,0.12); }
+    .status-icon { font-size: 1.6rem; display:inline-block; margin-right:8px; }
+
+    .status-title { font-weight: 700; font-size: 0.98rem; margin-bottom: 6px; display:flex; align-items:center; }
+    .status-sub { font-size: 0.86rem; color:#6c757d; margin-bottom:6px; }
+    .badge-indicator { position:absolute; top:10px; right:10px; }
+
+    .footer { text-align:center; color:#6c757d; margin-top:40px; padding-bottom:15px; font-size:0.85rem; }
+
+    .progress-small { height:8px; border-radius:6px; }
+
+    @media (max-width: 768px) {
+      .video-card { max-width: 95%; padding: 15px; }
+      .status-box { flex:1 1 45%; max-width: 45%; }
+    }
+  </style>
 </head>
 <body>
+  <nav class="navbar navbar-expand-lg">
+    <div class="container">
+      <a class="navbar-brand" href="#">👁️ Workplace Monitoring</a>
+    </div>
+  </nav>
 
-    <div class="container main-container text-center">
-        <h1 class="header-title">Workplace Monitoring | Live Feed</h1>
-
-        <div class="video-wrapper mx-auto">
-            <img src="{{ url_for('video_feed') }}" class="video-feed" alt="Real-Time Video Stream">
+  <div class="container text-center">
+    <div class="video-card">
+      <div class="d-flex justify-content-between align-items-center mb-2">
+        <h3 class="mb-0 text-primary fw-bold">Live Camera Feed</h3>
+        <div id="top-right-info" style="text-align:right;">
+          <div id="fps-badge" class="badge bg-dark text-warning">FPS: --</div>
         </div>
+      </div>
 
-        <div class="mt-4 p-3 text-secondary" style="background-color: #e9ecef; border-radius: 8px;">
-            <p class="mb-0">All detection statuses (Yawn, Drowsiness, Head Tilt, Phone Use) are overlaid directly onto the video stream.</p>
+      <div class="video-wrapper mx-auto mb-2">
+        <img id="stream" src="{{ url_for('video_feed') }}" class="video-feed" alt="Real-Time Video Stream">
+      </div>
+
+      <div class="d-flex justify-content-between align-items-center px-2">
+        <div id="employee-display" style="text-align:left;">
+          <small class="text-muted">Employee:</small>
+          <div id="employee-name" style="font-weight:700;">Unknown</div>
         </div>
+        <div id="stream-controls" style="text-align:right;">
+          <button id="btn-refresh" class="btn btn-outline-primary btn-sm">Refresh Stream</button>
+        </div>
+      </div>
     </div>
 
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js" integrity="sha384-YvpcrYf0tY3lHB60NNkmXc5s9fDVZLESaAA55NDzOxhy9GkcIdslK1eN7N6jIeHz" crossorigin="anonymous"></script>
-    
+    <!-- Status Section -->
+    <div class="status-container">
+      <div class="status-box" id="box-drowsy">
+        <div class="status-title"><span class="status-icon">😴</span> <div>Drowsiness <span id="badge-drowsy" class="badge badge-indicator bg-success">OK</span></div></div>
+        <div id="drowsy-text" class="status-sub">Monitors eye closure and blinking patterns</div>
+      </div>
+
+      <div class="status-box" id="box-yawn">
+        <div class="status-title"><span class="status-icon">🗣️</span> <div>Yawning <span id="badge-yawn" class="badge badge-indicator bg-success">OK</span></div></div>
+        <div id="yawn-text" class="status-sub">Detects mouth opening frequency and duration</div>
+      </div>
+
+      <div class="status-box" id="box-phone">
+        <div class="status-title"><span class="status-icon">📱</span> <div>Phone Usage <span id="badge-phone" class="badge badge-indicator bg-secondary">Idle</span></div></div>
+        <div id="phone-text" class="status-sub">Tracks mobile interaction time</div>
+        <div class="mt-2">
+          <div class="small text-muted">Visible time</div>
+          <div class="progress progress-small">
+            <div id="phone-progress" class="progress-bar" role="progressbar" style="width:0%">0s</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="status-box" id="box-tilt">
+        <div class="status-title"><span class="status-icon">🧠</span> <div>Head Tilt <span id="badge-tilt" class="badge badge-indicator bg-success">OK</span></div></div>
+        <div id="tilt-text" class="status-sub">Monitors posture and head orientation</div>
+      </div>
+    </div>
+
+  </div>
+
+  <div class="footer">
+    <p>© 2025 Workplace Monitoring System | Developed by Harsh Ambre</p>
+  </div>
+
+  <script>
+    const badges = {
+      ok: 'bg-success',
+      warn: 'bg-warning',
+      alert: 'bg-danger',
+      idle: 'bg-secondary'
+    };
+
+    // Map status string -> badge class & label
+    function mapStatusToBadge(status) {
+      if (!status) return { cls: badges.ok, label: 'OK' };
+      const s = status.toLowerCase();
+      if (s.includes('not') || s.includes('unknown') || s.includes('no')) return { cls: badges.idle, label: 'Idle' };
+      if (s.includes('alert') || s.includes('yawn') || s.includes('tilt') || s.includes('closed') || s.includes('detected') ) return { cls: badges.alert, label: 'Alert' };
+      if (s.includes('partial') || s.includes('warning') || s.includes('slight')) return { cls: badges.warn, label: 'Warning' };
+      return { cls: badges.ok, label: 'OK' };
+    }
+
+    async function fetchStatus() {
+      try {
+        const res = await fetch('/status', {cache: 'no-store'});
+        if (!res.ok) return;
+        const st = await res.json();
+
+        // Employee
+        document.getElementById('employee-name').textContent = st.employee || 'Unknown';
+
+        // FPS
+        document.getElementById('fps-badge').textContent = 'FPS: ' + (st.fps ?? '--');
+
+        // Yawn / Drowsy / Tilt
+        document.getElementById('yawn-text').textContent = st.yawn || 'Model Unavailable';
+        document.getElementById('drowsy-text').textContent = st.drowsy || 'Model Unavailable';
+        document.getElementById('tilt-text').textContent = st.tilt || 'Model Unavailable';
+
+        const bY = mapStatusToBadge(st.yawn);
+        const bD = mapStatusToBadge(st.drowsy);
+        const bT = mapStatusToBadge(st.tilt);
+
+        const badgeY = document.getElementById('badge-yawn');
+        badgeY.className = 'badge badge-indicator ' + bY.cls;
+        badgeY.textContent = bY.label;
+
+        const badgeD = document.getElementById('badge-drowsy');
+        badgeD.className = 'badge badge-indicator ' + bD.cls;
+        badgeD.textContent = bD.label;
+
+        const badgeT = document.getElementById('badge-tilt');
+        badgeT.className = 'badge badge-indicator ' + bT.cls;
+        badgeT.textContent = bT.label;
+
+        // Phone
+        const phoneBadge = document.getElementById('badge-phone');
+        if (st.phone_present) {
+          phoneBadge.className = 'badge badge-indicator ' + badges.alert;
+          phoneBadge.textContent = 'Using';
+          document.getElementById('phone-text').textContent = `Conf: ${st.phone_conf ? st.phone_conf.toFixed(2) : '--'} | votes ${st.phone_votes}/${st.phone_window}`;
+        } else {
+          phoneBadge.className = 'badge badge-indicator ' + badges.idle;
+          phoneBadge.textContent = 'Idle';
+          document.getElementById('phone-text').textContent = 'No phone detected';
+        }
+
+        // progress bar: show visible seconds / window as percent
+        const prog = document.getElementById('phone-progress');
+        const seconds = st.phone_visible_s || 0;
+        const window = st.phone_window || 12;
+        const pct = Math.min(100, Math.round((seconds / Math.max(1, window)) * 100));
+        prog.style.width = pct + '%';
+        prog.textContent = seconds + 's';
+
+      } catch (err) {
+        // console.log('status fetch err', err);
+      }
+    }
+
+    // Poll every second
+    setInterval(fetchStatus, 1000);
+    fetchStatus();
+
+    // Refresh stream button (re-assign src)
+    document.getElementById('btn-refresh').addEventListener('click', () => {
+      const img = document.getElementById('stream');
+      const src = img.src.split('?')[0];
+      img.src = src + '?t=' + Date.now();
+    });
+  </script>
+
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 </body>
 </html>
