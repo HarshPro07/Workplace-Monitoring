@@ -1,3 +1,4 @@
+import requests
 import sys
 import cv2
 import atexit
@@ -15,7 +16,7 @@ import os, importlib.util, torch
 init(autoreset=True)
 
 MODELS_DIR = os.path.join(os.path.dirname(__file__), "Models")
-sys.path.append(MODELS_DIR if os.path.isdir(MODELS_DIR) else r"C:/Users/Harsh/Project/Drowsiness-Detection/Models")
+sys.path.append(MODELS_DIR if os.path.isdir(MODELS_DIR) else r"E:\Sem7\Project1\Project\Workplace-Monitoring\Models")
 
 # Load model modules safely
 try:
@@ -43,10 +44,24 @@ app = Flask(__name__)
 def draw_bordered_text(img, text, org, font=cv2.FONT_HERSHEY_SIMPLEX,
                        font_scale=0.65, color=(0,255,0), thickness=1, outline_thickness=3):
     x, y = org
-    # outline (black)
     cv2.putText(img, text, (x, y), font, font_scale, (0,0,0), outline_thickness, cv2.LINE_AA)
-    # inner text
     cv2.putText(img, text, (x, y), font, font_scale, color, thickness, cv2.LINE_AA)
+
+# ---------- Robust status -> bool parsing ----------
+def _has_any(s, words):
+    return any(w in s for w in words)
+
+def status_to_bool(text, positive, negative=("not", "no ", "absent", "none", "idle")):
+    """
+    Convert status strings like 'Detected' / 'Not Detected' / 'Yawn' into a bool.
+    Checks negatives first so 'not detected' does NOT match 'detected'.
+    """
+    if text is None:
+        return False
+    s = str(text).strip().lower()
+    if _has_any(s, negative):
+        return False
+    return _has_any(s, positive)
 
 # =========================================================
 # CAMERA THREAD (non-blocking)
@@ -88,19 +103,14 @@ class VideoCaptureThread:
 # =========================================================
 # PHONE DETECTOR (Optimized)
 # =========================================================
-# --- Replace existing CentroidTracker & PhoneDetector with this improved version ---
 from collections import deque
 import math
 
 class CentroidIoUTracker:
-    """
-    Simple tracker that registers objects and associates new detections using IoU + centroid fallback.
-    Keeps disappeared counter and deregisters if missing for too long.
-    """
     def __init__(self, max_disappeared=15, max_distance=120):
         self.next_object_id = 0
-        self.objects = {}          # id -> (bbox, centroid)
-        self.disappeared = {}      # id -> frames disappeared
+        self.objects = {}
+        self.disappeared = {}
         self.max_disappeared = max_disappeared
         self.max_distance = max_distance
 
@@ -134,12 +144,7 @@ class CentroidIoUTracker:
         self.disappeared.pop(object_id, None)
 
     def update(self, rects):
-        """
-        rects: list of boxes (x1,y1,x2,y2)
-        returns dict of id -> (box, centroid)
-        """
         if len(rects) == 0:
-            # increment disappeared and deregister if needed
             for oid in list(self.disappeared.keys()):
                 self.disappeared[oid] += 1
                 if self.disappeared[oid] > self.max_disappeared:
@@ -157,25 +162,21 @@ class CentroidIoUTracker:
         object_boxes = [self.objects[oid][0] for oid in object_ids]
         object_centroids = [self.objects[oid][1] for oid in object_ids]
 
-        # compute IoU matrix between existing and new boxes
         iouM = np.zeros((len(object_boxes), len(rects)), dtype=float)
         for i, ob in enumerate(object_boxes):
             for j, nb in enumerate(rects):
                 iouM[i, j] = self._iou(ob, nb)
 
-        # Greedy match by highest IoU first
         rows, cols = np.where(iouM > 0)
-        # fallback on centroid distances if IoU too small
         assigned_rows, assigned_cols = set(), set()
         pairs = []
-        # sort pairs by IoU desc
         if rows.size > 0:
             pairs = sorted([(i, j, iouM[i, j]) for i, j in zip(rows, cols)], key=lambda x: x[2], reverse=True)
 
         for (row, col, score) in pairs:
             if row in assigned_rows or col in assigned_cols:
                 continue
-            if score < 0.15:  # low IoU threshold -> use centroid fallback
+            if score < 0.15:
                 continue
             oid = object_ids[row]
             self.objects[oid] = (rects[col], input_centroids[col])
@@ -183,9 +184,7 @@ class CentroidIoUTracker:
             assigned_rows.add(row)
             assigned_cols.add(col)
 
-        # Centroid fallback for unmatched columns
         if len(assigned_cols) < len(rects):
-            # compute centroid distance matrix for leftover
             unused_rows = [r for r in range(len(object_centroids)) if r not in assigned_rows]
             unused_cols = [c for c in range(len(rects)) if c not in assigned_cols]
             if unused_rows and unused_cols:
@@ -199,7 +198,6 @@ class CentroidIoUTracker:
                     self.disappeared[oid] = 0
                     assigned_rows.add(row); assigned_cols.add(col)
 
-        # mark disappeared for unmatched rows
         for r in range(len(object_boxes)):
             if r not in assigned_rows:
                 oid = object_ids[r]
@@ -207,7 +205,6 @@ class CentroidIoUTracker:
                 if self.disappeared[oid] > self.max_disappeared:
                     self.deregister(oid)
 
-        # register remaining unmatched cols
         for c in range(len(rects)):
             if c not in assigned_cols:
                 self.register(rects[c])
@@ -216,10 +213,6 @@ class CentroidIoUTracker:
 
 
 class PhoneDetector:
-    """
-    Improved phone detector using Ultralytics YOLO + temporal aggregator + tracker.
-    Tunable params at init for quick experimentation.
-    """
     def __init__(self, weights="yolov8n.pt", imgsz=640, conf=0.25, iou=0.45,
                  frame_skip=1, window_size=10, votes_needed=3, min_avg_conf=0.25):
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -235,7 +228,6 @@ class PhoneDetector:
         self.frame_skip = frame_skip
         self.frame_counter = 0
 
-        # temporal aggregation
         self.window_size = window_size
         self.conf_deque = deque(maxlen=window_size)
         self.presence_deque = deque(maxlen=window_size)
@@ -246,18 +238,11 @@ class PhoneDetector:
         self.last_info = {"present": False, "detections": [], "votes": 0, "window": window_size, "max_conf": None}
 
     def _predict(self, frame):
-        # ultralytics can accept numpy arrays (BGR). Use augment=True for TTA (slower but more robust).
         results = self.model.predict(source=frame, imgsz=self.imgsz, conf=self.conf, iou=self.iou,
                                      device=self.device, augment=True, verbose=False)
         return results
 
     def detect(self, frame):
-        """
-        Returns info dict:
-         - present: bool
-         - detections: list of {box, conf}
-         - votes, window, max_conf
-        """
         self.frame_counter += 1
         if self.frame_counter % max(1, self.frame_skip) != 0:
             return self.last_info
@@ -267,22 +252,19 @@ class PhoneDetector:
         detections = []
         frame_hit = False
 
-        # results[0].boxes contains xyxy, cls, conf
         for box in results[0].boxes:
             cls_id = int(box.cls[0])
             name = results[0].names.get(cls_id, "")
-            if name.lower() in ("cell phone", "cellphone", "phone"):   # be defensive about class names
+            if name.lower() in ("cell phone", "cellphone", "phone"):
                 x1, y1, x2, y2 = map(int, box.xyxy[0].cpu().numpy())
                 conf = float(box.conf[0].cpu().numpy())
-                # optionally ignore tiny boxes
                 w = x2 - x1; h = y2 - y1
-                if w < 24 or h < 24:   # ignore very small detections
+                if w < 24 or h < 24:
                     continue
                 boxes.append((x1,y1,x2,y2))
                 detections.append({"box": (x1,y1,x2,y2), "conf": conf})
                 frame_hit = True
 
-        # update tracker and temporal queues
         objects = self.tracker.update(boxes)
         self.presence_deque.append(1 if frame_hit else 0)
         max_conf = max((d["conf"] for d in detections), default=0.0)
@@ -290,14 +272,10 @@ class PhoneDetector:
 
         votes = sum(self.presence_deque)
         avg_conf = (sum(self.conf_deque)/len(self.conf_deque)) if len(self.conf_deque) else 0.0
-
-        # final present/hysteresis logic:
         present = (votes >= self.votes_needed) and (avg_conf >= self.min_avg_conf)
 
-        # prepare id-linked detections (match tracker ids to detection boxes by IoU)
         id_dets = []
         for oid, (tbox, centroid) in objects.items():
-            # find detection whose IoU with tracker box is highest
             best = None; best_iou = 0.0
             for det in detections:
                 i = CentroidIoUTracker._iou(tbox, det["box"])
@@ -306,7 +284,6 @@ class PhoneDetector:
             if best and best_iou > 0.05:
                 id_dets.append({"id": oid, "box": best["box"], "conf": best["conf"]})
             else:
-                # if no detection matches, still include track (low confidence)
                 id_dets.append({"id": oid, "box": tbox, "conf": None})
 
         info = {"present": bool(present),
@@ -324,14 +301,12 @@ class PhoneDetector:
             x1,y1,x2,y2 = det.get("box", (0,0,0,0))
             conf = det.get("conf")
             oid = det.get("id", -1)
-            # translucent fill + border
             overlay = out.copy()
             cv2.rectangle(overlay, (x1,y1),(x2,y2),(0,200,0),-1)
             cv2.addWeighted(overlay, 0.08, out, 0.92, 0, out)
             cv2.rectangle(out, (x1,y1),(x2,y2),(0,200,0),2)
             txt = f"P{oid} {conf:.2f}" if conf else f"P{oid}"
             draw_bordered_text(out, txt, (x1, y1-8), font_scale=0.55, color=(255,255,255), thickness=1, outline_thickness=2)
-        # small badge for presence
         ptxt = f"Phone: {'Yes' if info.get('present') else 'No'} ({info.get('votes')}/{info.get('window')}, avg:{info.get('avg_conf',0):.2f})"
         draw_bordered_text(out, ptxt, (12, 28), font_scale=0.6, color=(0,255,255), thickness=1, outline_thickness=3)
         return out
@@ -384,19 +359,15 @@ def gen_frames():
         frame, drowsy_status = eye.detect(frame)
         frame, tilt_status = tilted.detect(frame)
 
-        # Phone
-        # info = phone_detector.detect(frame)
-        # phone_status = "Detected" if info["present"] else "Not Detected"
-        # frame = phone_detector.draw_overlay(frame, info)
+        # ---- Convert statuses to boolean flags (robust) ----
+        yawn_flag   = status_to_bool(yawn_status,   ["yawn", "yawning", "open mouth", "detected"])
+        drowsy_flag = status_to_bool(drowsy_status, ["drowsy", "closed", "sleep", "blink", "dozing", "detected"])
+        tilt_flag   = status_to_bool(tilt_status,   ["tilt", "tilted", "lean", "detected"])
 
-                # ---------------------------
-        # Run phone detection (but don't draw yet)
-        # ---------------------------
-                # ---------------------------
-        # Run phone detection (but don't draw boxes yet)
-        # ---------------------------
+        # Phone
         info = phone_detector.detect(frame)
-        phone_status = "Detected" if info["present"] else "Not Detected"
+        phone_flag = bool(info.get("present", False))
+        phone_status = "Detected" if phone_flag else "Not Detected"
         votes = int(info.get('votes', 0))
         window = int(info.get('window', 1))
         avg_conf = float(info.get('avg_conf', 0.0)) if info.get('avg_conf') is not None else 0.0
@@ -418,25 +389,18 @@ def gen_frames():
         y_pos = 72
         for label, status in statuses:
             color = color_for_status(status)
-            # draw the main status text on the left
             draw_bordered_text(frame, f"{label}: {status}", (30, y_pos),
                                font_scale=0.7, color=color, thickness=1, outline_thickness=3)
 
-            # if this is the Phone line, draw the votes/avg to the right side of the header
             if label.startswith("4. Phone"):
-                # compute right-side anchor (within header box) so it always looks part of header
                 right_anchor_x = header_x2 - 12
-                # text we want to show inline; smaller font
-                phone_badge_txt = f"{'Using' if info.get('present') else 'No'} ({votes}/{window}, avg:{avg_conf:.2f})"
-                # measure text width to align to the right_anchor_x
+                phone_badge_txt = f"{'Using' if phone_flag else 'No'} ({votes}/{window}, avg:{avg_conf:.2f})"
                 (w_txt, h_txt), _ = cv2.getTextSize(phone_badge_txt, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 1)
-                # place so text right edge is near right_anchor_x
-                txt_x = max( int(right_anchor_x - w_txt), 320 )
+                txt_x = max(int(right_anchor_x - w_txt), 320)
                 txt_y = y_pos
                 draw_bordered_text(frame, phone_badge_txt, (txt_x, txt_y),
                                    font_scale=0.6, color=(0,200,255), thickness=1, outline_thickness=3)
             y_pos += 26
-
 
         # Summary (bottom-left)
         h = frame.shape[0]
@@ -455,13 +419,21 @@ def gen_frames():
         fps_smooth = fps_smooth * 0.9 + fps * 0.1
         draw_bordered_text(frame, f"FPS: {fps_smooth:.1f}", (frame.shape[1]-140,30), font_scale=0.6, color=(0,255,255), outline_thickness=2)
 
-        # Update latest_status (thread-safe)
+        # ---- Update latest_status (thread-safe) ----
         with status_lock:
             latest_status['employee'] = employee_name
-            latest_status['yawn'] = yawn_status
+
+            # original strings (handy for UI/GET /status)
+            latest_status['yawn']   = yawn_status
             latest_status['drowsy'] = drowsy_status
-            latest_status['tilt'] = tilt_status
-            latest_status['phone_present'] = bool(info['present'])
+            latest_status['tilt']   = tilt_status
+
+            # boolean flags (for logging)
+            latest_status['yawn_bool']   = yawn_flag
+            latest_status['drowsy_bool'] = drowsy_flag
+            latest_status['tilt_bool']   = tilt_flag
+            latest_status['phone_present'] = phone_flag
+
             latest_status['phone_votes'] = int(info.get('votes', 0))
             latest_status['phone_window'] = int(info.get('window', 12))
             latest_status['phone_conf'] = float(info['max_conf']) if info.get('max_conf') is not None else None
@@ -474,11 +446,57 @@ def gen_frames():
         if not ret: continue
         yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
 
+# ----------- PYTHON -> NODE -------------
+NODE_API_URL = "http://localhost:3000/api/logs/add"  # your Node endpoint
+
+def push_to_node():
+    while True:
+        time.sleep(5)  # send every 5 seconds (tweak as needed)
+
+        # Read booleans safely under lock
+        with status_lock:
+            b_yawn   = bool(latest_status.get("yawn_bool", False))
+            b_drowsy = bool(latest_status.get("drowsy_bool", False))
+            b_tilt   = bool(latest_status.get("tilt_bool", False))
+            b_phone  = bool(latest_status.get("phone_present", False))
+
+        # ---- Scores (tweak weights as you like) ----
+        fatigue = 100
+        fatigue -= 25 if b_drowsy else 0
+        fatigue -= 15 if b_yawn else 0
+        fatigue -= 10 if b_tilt else 0
+        fatigue = max(0, min(100, fatigue))
+
+        productivity = 100
+        productivity -= 30 if b_phone else 0
+        productivity -= 10 if b_drowsy else 0
+        productivity = max(0, min(100, productivity))
+
+        payload = {
+            "yawn": b_yawn,
+            "drowsy": b_drowsy,
+            "tilt": b_tilt,
+            "phone": b_phone,
+            "fatigue_score": fatigue,
+            "productivity_score": productivity
+        }
+
+        try:
+            response = requests.post(NODE_API_URL, json=payload, timeout=3)
+            if response.status_code == 201:
+                print(Fore.GREEN + f"Log pushed to Node: {payload}")
+            else:
+                print(Fore.YELLOW + f"Node response: {response.status_code} {response.text}")
+        except Exception as e:
+            print(Fore.RED + f"Failed to send log: {e}")
+
+# Start thread
+threading.Thread(target=push_to_node, daemon=True).start()
+
 # ---------- STATUS API ----------
 @app.route('/status')
 def get_status():
     with status_lock:
-        # return a safe copy
         return jsonify(dict(latest_status))
 
 # ---------- ROUTES ----------
