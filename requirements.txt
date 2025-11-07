@@ -1,0 +1,11 @@
+flask
+requests
+colorama
+opencv-python
+ultralytics
+torch
+torchvision
+numpy
+
+
+# pip install -r requirements.txt
